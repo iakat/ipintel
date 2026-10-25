@@ -1,0 +1,4 @@
+/data/
+/ip-intel
+*.bin
+coverage.out

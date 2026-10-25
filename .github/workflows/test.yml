@@ -1,0 +1,24 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: vet
+        run: go vet ./...
+      - name: test
+        run: go test ./... -coverprofile=coverage.out
+      - name: coverage
+        run: go tool cover -func=coverage.out | tail -1 | grep -q '100.0%'
