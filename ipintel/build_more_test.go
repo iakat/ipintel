@@ -86,6 +86,14 @@ func TestSourceFiles(t *testing.T) {
 	if _, ok, err := sourceFiles(dir, optional); err != nil || ok {
 		t.Fatalf("partial optional = %v, %v", ok, err)
 	}
+	// A partial optional source keeps the files that are present.
+	partial := findSpec(t, "open-proxies")
+	if err := os.WriteFile(filepath.Join(dir, partial.Files[0].Name), []byte(`[]`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok, err := sourceFiles(dir, partial); err != nil || !ok || len(got) != 1 {
+		t.Fatalf("partial optional allowed = %+v, %v, %v", got, ok, err)
+	}
 	// Partial required source is an error.
 	required := findSpec(t, "x4b-vpn")
 	if err := os.WriteFile(filepath.Join(dir, required.Files[0].Name), []byte("1.2.3.0/24"), 0644); err != nil {
@@ -386,4 +394,58 @@ func TestWriteDatabaseErrors(t *testing.T) {
 			t.Fatal("rename error")
 		}
 	})
+}
+
+func TestUseBaseForPartial(t *testing.T) {
+	spec := sourceSpec{Name: "p", Partial: true, Files: []fetchFile{{Name: "a"}, {Name: "b"}}}
+	base := map[string][]Record{"p": {testRecord(t, "1.2.3.0/24", 0, "proxy", 70, 0, "", "", "{}")}}
+	if useBaseForPartial(spec, []FileMeta{{Name: "a"}}, nil) {
+		t.Fatal("partial without base should parse")
+	}
+	if !useBaseForPartial(spec, []FileMeta{{Name: "a"}}, base) {
+		t.Fatal("partial with base should reuse base")
+	}
+	if useBaseForPartial(spec, []FileMeta{{Name: "a"}, {Name: "b"}}, base) {
+		t.Fatal("complete source should parse")
+	}
+	spec.Partial = false
+	if useBaseForPartial(spec, []FileMeta{{Name: "a"}}, base) {
+		t.Fatal("non-partial source should parse")
+	}
+}
+
+func TestBuildPartialSourceFallsBackToBase(t *testing.T) {
+	dir := t.TempDir()
+	basePath := filepath.Join(dir, "base.bin")
+	rec := testRecord(t, "1.2.3.4/32", 0, "proxy", 70, 0, "", "", `{"sources":["monosans"]}`)
+	if err := writeDatabase(basePath, []Record{rec}, &Manifest{
+		FormatVersion: FormatVersion, BlockSize: 8,
+		Sources: []SourceMeta{{ID: 0, Name: "open-proxies", Records: 1}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	raw := t.TempDir()
+	if err := os.WriteFile(filepath.Join(raw, "open-proxies-iplocate.txt"), []byte("5.6.7.8:1080\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(t.TempDir(), "out.bin")
+	m, err := Build(BuildOptions{
+		RawDir: raw, OutFile: out, BaseDB: basePath,
+		Exclude: excludeAllExcept("open-proxies"), BlockSize: 8,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.RecordCount != 1 || len(m.Sources) != 1 || m.Sources[0].Name != "open-proxies" {
+		t.Fatalf("manifest = %+v", m)
+	}
+	db, err := Open(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	res, err := db.Lookup("1.2.3.4")
+	if err != nil || !hasEvidence(res.Evidence, "open-proxies", "proxy") {
+		t.Fatalf("lookup = %+v, %v", res, err)
+	}
 }

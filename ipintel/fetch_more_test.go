@@ -72,18 +72,18 @@ func TestFetchWithOptions(t *testing.T) {
 		})
 	}
 	dir := t.TempDir()
-	opts := FetchOptions{Exclude: excludeAllExcept("open-proxies")}
+	opts := FetchOptions{Exclude: excludeAllExcept("open-proxies"), Parallel: 1}
 	if err := FetchWithOptions(context.Background(), dir, opts); err != nil {
 		t.Fatal(err)
 	}
-	if b, err := os.ReadFile(filepath.Join(dir, "open-proxies.txt")); err != nil || string(b) != "payload" {
+	if b, err := os.ReadFile(filepath.Join(dir, "open-proxies-monosans.json")); err != nil || string(b) != "payload" {
 		t.Fatalf("downloaded file = %q, %v", b, err)
 	}
 	if err := FetchWithOptions(context.Background(), dir, opts); err != nil {
 		t.Fatal(err)
 	}
-	if heads != 2 || gets != 1 {
-		t.Fatalf("heads/gets = %d/%d, want 2/1", heads, gets)
+	if heads != 10 || gets != 5 {
+		t.Fatalf("heads/gets = %d/%d, want 10/5", heads, gets)
 	}
 
 	// No tasks at all, and both parallel clamps.
@@ -134,7 +134,7 @@ func TestFetchWithOptionsBase(t *testing.T) {
 	base := &Manifest{Sources: []SourceMeta{{
 		Name: "open-proxies",
 		Files: []FileMeta{{
-			Name: "open-proxies.txt", URL: "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/all.txt",
+			Name: "open-proxies-monosans.json", URL: "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies.json",
 			ETag: `"v1"`, Bytes: 7,
 		}},
 	}}}
@@ -425,6 +425,31 @@ func TestFetchWithOptionsMkdirError(t *testing.T) {
 	}
 	if err := FetchWithOptions(context.Background(), filepath.Join(blocker, "raw"), FetchOptions{Exclude: excludeAllExcept()}); err == nil {
 		t.Fatal("mkdir error should fail")
+	}
+}
+
+func TestRetryContextCancellationDuringWait(t *testing.T) {
+	oldRetry := retryBase
+	retryBase = 20 * time.Millisecond
+	t.Cleanup(func() { retryBase = oldRetry })
+	client := testHTTPClient(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("network")
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(2 * time.Millisecond)
+		cancel()
+	}()
+	if _, err := headRequest(ctx, client, "https://example.com"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("head wait cancel = %v", err)
+	}
+	ctx, cancel = context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(2 * time.Millisecond)
+		cancel()
+	}()
+	if _, err := downloadConditional(ctx, client, "https://example.com", filepath.Join(t.TempDir(), "file"), fileState{}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("download wait cancel = %v", err)
 	}
 }
 

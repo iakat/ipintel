@@ -70,6 +70,9 @@ func Build(opts BuildOptions) (*Manifest, error) {
 		if err != nil {
 			return nil, err
 		}
+		if ok && useBaseForPartial(spec, files, baseRecords) {
+			ok = false
+		}
 		if !ok {
 			old, exists := baseRecords[spec.Name]
 			if !exists {
@@ -130,6 +133,19 @@ func Build(opts BuildOptions) (*Manifest, error) {
 	if len(records) == 0 {
 		return nil, fmt.Errorf("no records parsed")
 	}
+	var openASNRecords []Record
+	for _, source := range sources {
+		if source.Name != "openasn" {
+			continue
+		}
+		for _, r := range records {
+			if r.SourceID == source.ID {
+				openASNRecords = append(openASNRecords, r)
+			}
+		}
+		break
+	}
+	deriveResidentialProxies(records, openASNRecords)
 	sortRecords(records)
 	manifest := &Manifest{
 		FormatVersion: FormatVersion,
@@ -173,6 +189,18 @@ func loadBase(path string) (map[string][]Record, map[string]SourceMeta, map[uint
 	return records, sources, db.manifest.ASNs, db.manifest.OpenASNBuild, nil
 }
 
+// useBaseForPartial avoids dropping records from the missing files of a
+// partial source. If the base database already has the source, reuse it until
+// every file is available again; a partial parse would silently discard the
+// records that came from the absent files.
+func useBaseForPartial(spec sourceSpec, files []FileMeta, base map[string][]Record) bool {
+	if !spec.Partial || len(files) == len(spec.Files) {
+		return false
+	}
+	_, ok := base[spec.Name]
+	return ok
+}
+
 func sourceFiles(rawDir string, spec sourceSpec) ([]FileMeta, bool, error) {
 	files := make([]FileMeta, 0, len(spec.Files))
 	present := 0
@@ -200,6 +228,9 @@ func sourceFiles(rawDir string, spec sourceSpec) ([]FileMeta, bool, error) {
 		return nil, false, nil
 	}
 	if present != len(spec.Files) {
+		if spec.Optional && spec.Partial {
+			return files, true, nil
+		}
 		if spec.Optional {
 			return nil, false, nil
 		}

@@ -3,8 +3,9 @@
 Small standalone service and Go library for local IP intelligence.
 
 It downloads public static lists, normalizes them into one sorted/deduplicated
-database, compresses each block with zstd, and answers a lookup from a small
-uncompressed block index. No end-user IP is sent to a third party.
+database, derives residential-proxy signals locally from open proxies on
+consumer networks, compresses each block with zstd, and answers a lookup from a
+small uncompressed block index. No end-user IP is sent to a third party.
 
 ## Install
 
@@ -19,7 +20,7 @@ comma-separated names; `ip-intel sources` prints the accepted names.
 
 ```bash
 # download everything (OpenASN, GeoLite2, X4B, VPN lists, Tor, iCloud Relay,
-# cloud ranges, open proxies) and build data/ipintel.bin
+# cloud/datacentre ranges, open proxies) and build data/ipintel.bin
 go run ./cmd/ip-intel fetch --out data
 
 # leave out a few sources
@@ -52,6 +53,11 @@ records are carried forward from the database; only changed sources are
 downloaded and reparsed. That means you can delete the large raw files after a
 build and still update incrementally, as long as `ipintel.bin` is kept.
 
+For the multi-file partial sources (`open-proxies`, `hexydec-datacenter` and
+`cloud-cn`), a build with a base database reuses the base records while any of
+the source files are missing. This keeps the records from absent files instead
+of silently dropping them; the source is reparsed once all its files are back.
+
 ## Query
 
 ```bash
@@ -67,7 +73,9 @@ The JSON contains:
 - `score` and `verdict` (a confidence-weighted network score, not an abuse
   verdict);
 - every source result, including `matched: false`;
-- the raw detail object for each match.
+- the raw detail object for each match. Open-proxy matches carry `sources`,
+  `roles`, `protocols` and `ports`; a derived residential match adds
+  `network_category`, `derived` and `derived_from`.
 
 ## Service
 
@@ -142,7 +150,10 @@ downloaded file is also recorded in the database manifest.
 | `digitalocean` | DigitalOcean public geofeed | [DigitalOcean geofeed](https://www.digitalocean.com/geo/google.csv) | [DigitalOcean terms](https://www.digitalocean.com/legal/terms-of-service-agreement) |
 | `linode` | Akamai/Linode public geofeed | [geoip.linode.com](https://geoip.linode.com/) | [Akamai/Linode terms](https://www.akamai.com/legal) |
 | `fastly` | Fastly public IP ranges | [Fastly public IP list](https://www.fastly.com/documentation/reference/api/utils/public-ip-list/) | [Fastly terms](https://www.fastly.com/terms) |
-| `open-proxies` | Open HTTP, SOCKS4 and SOCKS5 proxies | [monosans/proxy-list](https://github.com/monosans/proxy-list) | [MIT](https://github.com/monosans/proxy-list/blob/main/LICENSE) |
+| `open-proxies` | Open HTTP, SOCKS4 and SOCKS5 proxies (deduplicated by IP) | [monosans/proxy-list](https://github.com/monosans/proxy-list), [ClearProxy](https://github.com/ClearProxy/checked-proxy-list), [iplocate](https://github.com/iplocate/free-proxy-list) | [MIT](https://github.com/monosans/proxy-list/blob/main/LICENSE) |
+| `ipgeo-vpn` | Provider-named VPN ranges | [ipgeo Community Edition](https://github.com/whois-api-llc/ipgeo-community) | [CC BY-SA 4.0](https://github.com/whois-api-llc/ipgeo-community/blob/main/LICENSE) |
+| `hexydec-datacenter` | Datacentre and hosting ranges | [hexydec/ip-ranges](https://github.com/hexydec/ip-ranges) | [MIT](https://github.com/hexydec/ip-ranges/blob/main/LICENSE) |
+| `cloud-cn` | Alibaba, Tencent, Huawei, Baidu, JD, UCloud and Kingsoft Cloud ranges | [axpwx/IP-Data](https://github.com/axpwx/IP-Data) | [MIT](https://github.com/axpwx/IP-Data/blob/master/LICENSE) |
 
 `vpn-provider` currently contains first-party lists for
 [AirVPN](https://airvpn.org/), [IVPN](https://www.ivpn.net/),
@@ -156,9 +167,20 @@ OpenASN compiles upstream ASN and overlay data; its attribution receipts are in
 [ATTRIBUTION.md](https://github.com/openasn/openasn/blob/main/ATTRIBUTION.md).
 GeoLite2 is fetched through the P3TERX mirror; the data remains MaxMind's and
 the GeoLite2 EULA applies. The `aws`, `gcp`, `cloudflare`, `oracle`,
-`digitalocean`, `linode`, `fastly` and `open-proxies` sources are marked
-optional in the manifest: missing files do not fail a build, but they are
-enabled by default.
+`digitalocean`, `linode`, `fastly`, `open-proxies`, `ipgeo-vpn`,
+`hexydec-datacenter` and `cloud-cn` sources are marked optional in the
+manifest: missing files do not fail a build, but they are enabled by default.
+
+The `open-proxies` source is one logical group with one record per IP. It
+merges monosans, ClearProxy and iplocate, keeps the protocols, ports and
+provenance in the detail object, and raises confidence from 70 to 80 or 85
+when two or three independent lists agree. A missing file only removes that
+list; the remaining proxy files still build.
+
+`ipgeo-vpn` is the provider-named VPN surface from the CC BY-SA 4.0 ipgeo
+Community Edition; that list currently carries IPv4 ranges only. The
+`hexydec-datacenter` and `cloud-cn` feeds fill hosting gaps that the provider
+geofeeds do not name.
 
 `x4b` and the provider lists already cover much of the cloud/hosting space;
 the cloud ranges add names and more precise prefixes. Cloudflare is tagged as
@@ -166,9 +188,17 @@ CDN, not as a VPN. Pomerium is tagged `vpn_candidate` and deliberately
 contributes zero weight because its broad list produces false positives (for
 example 8.8.8.0/24).
 
-There is no free, reliable local residential-proxy dataset. OpenASN's
-`residential_isp` verdict means an ordinary eyeball ISP, not a residential
-proxy; the latter needs a commercial feed.
+OpenASN's `residential_isp` verdict means an ordinary eyeball ISP, not a
+residential proxy by itself. During `build`, an open proxy that sits on an
+OpenASN `residential_isp` or `mobile` network is promoted to the
+`residential_proxy` category at confidence 95 or 85. The category is replaced,
+not added, so the same observation is not counted twice. This is a local
+heuristic for proxies running on consumer networks, not a commercial
+residential-proxy feed: it cannot see a residential exit that never appears in
+an open-proxy list. `business`, `education`, `government`, `hosting`, `vpn`,
+`tor` and `cdn` networks stay `proxy`, but the detail object records the
+OpenASN network category for auditing.
+
 
 ## License
 

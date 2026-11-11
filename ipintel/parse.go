@@ -2,14 +2,17 @@ package ipintel
 
 import (
 	"bufio"
+	"compress/gzip"
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -89,11 +92,6 @@ func recordFromPrefix(p netip.Prefix, category string, confidence uint8, detail 
 		Family: family, Start: start, End: end,
 		Category: category, Confidence: confidence, Detail: detail,
 	}
-}
-
-func recordFromAddr(a netip.Addr, category string, confidence uint8, detail string) Record {
-	a = a.Unmap()
-	return recordFromPrefix(netip.PrefixFrom(a, a.BitLen()), category, confidence, detail)
 }
 
 func detailForCIDR(token string, extra map[string]any) string {
@@ -400,15 +398,221 @@ func parseICloudRelay(dir string, files []string) (parsedSource, error) {
 	return out, nil
 }
 
-func parseOpenProxies(dir string, files []string) (parsedSource, error) {
-	var out parsedSource
-	f, err := os.Open(filepath.Join(dir, files[0]))
+type proxyAggregate struct {
+	family     uint8
+	start, end [16]byte
+	roles      map[string]bool
+	protocols  map[string]bool
+	ports      map[string]bool
+	sources    map[string]bool
+	proxyHosts map[string]bool
+	asn        uint32
+	org        string
+	country    string
+}
+
+type proxyParser struct {
+	entries map[string]*proxyAggregate
+	keys    []string
+}
+
+func newProxyParser() *proxyParser {
+	return &proxyParser{entries: make(map[string]*proxyAggregate)}
+}
+
+func (p *proxyParser) add(addr netip.Addr, role, protocol, port, source, proxyHost string, asn uint32, org, country string) {
+	if !addr.IsValid() {
+		return
+	}
+	addr = addr.Unmap()
+	family, start := addrBytes(addr)
+	key := fmt.Sprintf("%d|%x|%x", family, start, start)
+	e, ok := p.entries[key]
+	if !ok {
+		e = &proxyAggregate{
+			family: family, start: start, end: start,
+			roles:      map[string]bool{},
+			protocols:  map[string]bool{},
+			ports:      map[string]bool{},
+			sources:    map[string]bool{},
+			proxyHosts: map[string]bool{},
+		}
+		p.entries[key] = e
+		p.keys = append(p.keys, key)
+	}
+	if role != "" {
+		e.roles[role] = true
+	}
+	if protocol != "" {
+		e.protocols[protocol] = true
+	}
+	if port != "" {
+		e.ports[port] = true
+	}
+	if source != "" {
+		e.sources[source] = true
+	}
+	if proxyHost != "" {
+		e.proxyHosts[proxyHost] = true
+	}
+	if e.asn == 0 && asn != 0 {
+		e.asn = asn
+	}
+	if e.org == "" && org != "" {
+		e.org = org
+	}
+	if e.country == "" && country != "" {
+		e.country = country
+	}
+}
+
+func sortedSet(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for v := range m {
+		out = append(out, v)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func (p *proxyParser) result() parsedSource {
+	out := parsedSource{Records: make([]Record, 0, len(p.entries))}
+	for _, key := range p.keys {
+		e := p.entries[key]
+		protocols := sortedSet(e.protocols)
+		ports := sortedSet(e.ports)
+		detail := map[string]any{
+			"roles":     sortedSet(e.roles),
+			"protocols": protocols,
+			"ports":     ports,
+			"sources":   sortedSet(e.sources),
+		}
+		if hosts := sortedSet(e.proxyHosts); len(hosts) > 0 {
+			detail["proxy_hosts"] = hosts
+		}
+		if e.asn != 0 {
+			detail["asn"] = e.asn
+		}
+		if e.org != "" {
+			detail["org"] = e.org
+		}
+		if e.country != "" {
+			detail["country"] = e.country
+		}
+		if len(protocols) > 0 {
+			detail["proxy"] = protocols[0]
+		}
+		if len(ports) > 0 {
+			detail["port"] = ports[0]
+		}
+		confidence := uint8(70)
+		switch {
+		case len(e.sources) >= 3:
+			confidence = 85
+		case len(e.sources) == 2:
+			confidence = 80
+		}
+		out.Records = append(out.Records, Record{
+			Family: e.family, Start: e.start, End: e.end,
+			Category: "proxy", Confidence: confidence,
+			ASN: e.asn, Org: e.org, Country: e.country,
+			Detail: detailJSON(detail),
+		})
+	}
+	return out
+}
+
+type monosansProxy struct {
+	Protocol string `json:"protocol"`
+	Host     string `json:"host"`
+	Port     int    `json:"port"`
+	ExitIP   string `json:"exit_ip"`
+	ASN      *struct {
+		Number uint32 `json:"autonomous_system_number"`
+		Org    string `json:"autonomous_system_organization"`
+	} `json:"asn"`
+	Geolocation struct {
+		Country struct {
+			ISOCode string `json:"iso_code"`
+		} `json:"country"`
+	} `json:"geolocation"`
+}
+
+func proxySourceLabel(name string) string {
+	base := strings.TrimSuffix(filepath.Base(name), filepath.Ext(name))
+	for _, label := range []string{"monosans", "clearproxy", "iplocate"} {
+		if strings.Contains(base, label) {
+			return label
+		}
+	}
+	return base
+}
+
+func proxyProtocolHint(name string) string {
+	switch {
+	case strings.Contains(name, "socks4"):
+		return "socks4"
+	case strings.Contains(name, "socks5"):
+		return "socks5"
+	default:
+		return "http"
+	}
+}
+
+func parseOpenProxyJSON(path, name string, p *proxyParser) error {
+	b, err := os.ReadFile(path)
 	if err != nil {
-		return out, err
+		return err
+	}
+	var rows []monosansProxy
+	if err := json.Unmarshal(b, &rows); err != nil {
+		return fmt.Errorf("%s: %w", name, err)
+	}
+	source := proxySourceLabel(name)
+	for _, row := range rows {
+		host, err := netip.ParseAddr(row.Host)
+		if err != nil {
+			continue
+		}
+		host = host.Unmap()
+		protocol := row.Protocol
+		if protocol == "" {
+			protocol = "http"
+		}
+		port := ""
+		if row.Port > 0 {
+			port = strconv.Itoa(row.Port)
+		}
+		var asn uint32
+		var org, country string
+		if row.ASN != nil {
+			asn, org = row.ASN.Number, row.ASN.Org
+		}
+		country = strings.ToUpper(strings.TrimSpace(row.Geolocation.Country.ISOCode))
+		exit, exitErr := netip.ParseAddr(row.ExitIP)
+		if exitErr == nil {
+			exit = exit.Unmap()
+		}
+		if exitErr == nil && exit != host {
+			p.add(host, "proxy_host", protocol, port, source, "", 0, "", "")
+			p.add(exit, "exit", protocol, port, source, row.Host, asn, org, country)
+			continue
+		}
+		p.add(host, "proxy", protocol, port, source, "", asn, org, country)
+	}
+	return nil
+}
+
+func parseOpenProxyText(path, name string, p *proxyParser) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
 	}
 	defer f.Close()
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 64*1024), 1024*1024)
+	source := proxySourceLabel(name)
+	hint := proxyProtocolHint(name)
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
 		if line == "" || strings.HasPrefix(line, "#") {
@@ -426,13 +630,96 @@ func parseOpenProxies(dir string, files []string) (parsedSource, error) {
 		if err != nil {
 			continue
 		}
-		detail := map[string]any{"proxy": u.Scheme}
-		if u.Port() != "" {
-			detail["port"] = u.Port()
+		protocol := u.Scheme
+		if !strings.Contains(line, "://") {
+			protocol = hint
 		}
-		out.Records = append(out.Records, recordFromAddr(addr, "proxy", 70, detailJSON(detail)))
+		p.add(addr, "proxy", protocol, u.Port(), source, "", 0, "", "")
 	}
-	return out, sc.Err()
+	return sc.Err()
+}
+
+func parseOpenProxies(dir string, files []string) (parsedSource, error) {
+	p := newProxyParser()
+	for _, name := range files {
+		path := filepath.Join(dir, name)
+		var err error
+		if strings.HasSuffix(strings.ToLower(name), ".json") {
+			err = parseOpenProxyJSON(path, name, p)
+		} else {
+			err = parseOpenProxyText(path, name, p)
+		}
+		if err != nil {
+			return parsedSource{}, err
+		}
+	}
+	return p.result(), nil
+}
+
+func parseIPGeoVPN(dir string, files []string) (parsedSource, error) {
+	var out parsedSource
+	f, err := os.Open(filepath.Join(dir, files[0]))
+	if err != nil {
+		return out, err
+	}
+	defer f.Close()
+	zr, err := gzip.NewReader(f)
+	if err != nil {
+		return out, err
+	}
+	defer zr.Close()
+	r := csv.NewReader(zr)
+	r.FieldsPerRecord = -1
+	for {
+		row, err := r.Read()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return out, err
+		}
+		if len(row) == 0 || strings.TrimSpace(row[0]) == "" {
+			continue
+		}
+		p, err := parsePrefix(row[0])
+		if err != nil {
+			continue
+		}
+		detail := map[string]any{}
+		if len(row) > 1 && strings.TrimSpace(row[1]) != "" {
+			detail["provider"] = strings.TrimSpace(row[1])
+		}
+		if len(row) > 2 && strings.TrimSpace(row[2]) != "" {
+			detail["basis"] = strings.TrimSpace(row[2])
+		}
+		out.Records = append(out.Records, recordFromPrefix(p, "vpn", 80, detailJSON(detail)))
+	}
+	return out, nil
+}
+
+func cloudCNProvider(name string) string {
+	base := strings.TrimPrefix(filepath.Base(name), "cloud-cn-")
+	for _, suffix := range []string{"-ipv4.txt", "-ipv6.txt"} {
+		if strings.HasSuffix(base, suffix) {
+			return strings.TrimSuffix(base, suffix)
+		}
+	}
+	return strings.TrimSuffix(base, filepath.Ext(base))
+}
+
+func parseCloudCN(dir string, files []string) (parsedSource, error) {
+	var out parsedSource
+	for _, name := range files {
+		parsed, err := parseCIDRText(dir, []string{name}, "hosting", 90, map[string]any{
+			"provider": cloudCNProvider(name),
+			"list":     "axpwx",
+		})
+		if err != nil {
+			return out, err
+		}
+		out.Records = append(out.Records, parsed.Records...)
+	}
+	return out, nil
 }
 
 func parseAWS(dir string, files []string) (parsedSource, error) {

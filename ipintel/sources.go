@@ -16,8 +16,11 @@ type sourceSpec struct {
 	Homepage string
 	License  string
 	Optional bool
-	Files    []fetchFile
-	Parse    func(dir string, files []string) (parsedSource, error)
+	// Partial allows an optional source to build from the files that are
+	// present instead of being skipped when one file is missing.
+	Partial bool
+	Files   []fetchFile
+	Parse   func(dir string, files []string) (parsedSource, error)
 }
 
 type parsedSource struct {
@@ -28,26 +31,29 @@ type parsedSource struct {
 // sourceHomepages is the public credit/homepage for each source. Keep it in
 // sync with the README source table.
 var sourceHomepages = map[string]string{
-	"openasn":          "https://github.com/openasn/openasn",
-	"geolite2-country": "https://dev.maxmind.com/geoip/geolite2-free-geolocation-data/",
-	"geolite2-asn":     "https://dev.maxmind.com/geoip/geolite2-free-geolocation-data/",
-	"x4b-vpn":          "https://github.com/X4BNet/lists_vpn",
-	"x4b-datacenter":   "https://github.com/X4BNet/lists_vpn",
-	"vpn-provider":     "https://github.com/Joe12387/open-source-vpn-ip-lists",
-	"nazgul-vpn":       "https://github.com/NazgulCoder/IPLists",
-	"pomerium-vpn":     "https://github.com/pomerium/vpnlist",
-	"cloudflare-warp":  "https://github.com/NazgulCoder/IPLists",
-	"bad-asn-list":     "https://github.com/brianhama/bad-asn-list",
-	"tor-exit":         "https://check.torproject.org/torbulkexitlist",
-	"icloud-relay":     "https://support.apple.com/en-us/102602",
-	"aws":              "https://docs.aws.amazon.com/vpc/latest/userguide/aws-ip-ranges.html",
-	"gcp":              "https://cloud.google.com/compute/docs/faq#find_ip_range",
-	"cloudflare":       "https://www.cloudflare.com/ips/",
-	"oracle":           "https://docs.oracle.com/en-us/iaas/tools/public_ip_ranges.json",
-	"digitalocean":     "https://www.digitalocean.com/geo/google.csv",
-	"linode":           "https://geoip.linode.com/",
-	"fastly":           "https://www.fastly.com/documentation/reference/api/utils/public-ip-list/",
-	"open-proxies":     "https://github.com/monosans/proxy-list",
+	"openasn":            "https://github.com/openasn/openasn",
+	"geolite2-country":   "https://dev.maxmind.com/geoip/geolite2-free-geolocation-data/",
+	"geolite2-asn":       "https://dev.maxmind.com/geoip/geolite2-free-geolocation-data/",
+	"x4b-vpn":            "https://github.com/X4BNet/lists_vpn",
+	"x4b-datacenter":     "https://github.com/X4BNet/lists_vpn",
+	"vpn-provider":       "https://github.com/Joe12387/open-source-vpn-ip-lists",
+	"nazgul-vpn":         "https://github.com/NazgulCoder/IPLists",
+	"pomerium-vpn":       "https://github.com/pomerium/vpnlist",
+	"cloudflare-warp":    "https://github.com/NazgulCoder/IPLists",
+	"bad-asn-list":       "https://github.com/brianhama/bad-asn-list",
+	"tor-exit":           "https://check.torproject.org/torbulkexitlist",
+	"icloud-relay":       "https://support.apple.com/en-us/102602",
+	"aws":                "https://docs.aws.amazon.com/vpc/latest/userguide/aws-ip-ranges.html",
+	"gcp":                "https://cloud.google.com/compute/docs/faq#find_ip_range",
+	"cloudflare":         "https://www.cloudflare.com/ips/",
+	"oracle":             "https://docs.oracle.com/en-us/iaas/tools/public_ip_ranges.json",
+	"digitalocean":       "https://www.digitalocean.com/geo/google.csv",
+	"linode":             "https://geoip.linode.com/",
+	"fastly":             "https://www.fastly.com/documentation/reference/api/utils/public-ip-list/",
+	"open-proxies":       "https://github.com/monosans/proxy-list",
+	"ipgeo-vpn":          "https://github.com/whois-api-llc/ipgeo-community",
+	"hexydec-datacenter": "https://github.com/hexydec/ip-ranges",
+	"cloud-cn":           "https://github.com/axpwx/IP-Data",
 }
 
 // sourceSpecs is the single source of truth for URLs, raw file names and
@@ -217,9 +223,53 @@ func sourceSpecs(opts Options) []sourceSpec {
 			Parse: parseFastly,
 		},
 		sourceSpec{
-			Name: "open-proxies", License: "MIT", Optional: true,
-			Files: []fetchFile{{Name: "open-proxies.txt", URL: "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/all.txt"}},
+			Name: "open-proxies", License: "MIT", Optional: true, Partial: true,
+			Files: []fetchFile{
+				{Name: "open-proxies-monosans.json", URL: "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies.json"},
+				{Name: "open-proxies-clearproxy-http.txt", URL: "https://raw.githubusercontent.com/ClearProxy/checked-proxy-list/main/http/raw/all.txt"},
+				{Name: "open-proxies-clearproxy-socks4.txt", URL: "https://raw.githubusercontent.com/ClearProxy/checked-proxy-list/main/socks4/raw/all.txt"},
+				{Name: "open-proxies-clearproxy-socks5.txt", URL: "https://raw.githubusercontent.com/ClearProxy/checked-proxy-list/main/socks5/raw/all.txt"},
+				{Name: "open-proxies-iplocate.txt", URL: "https://raw.githubusercontent.com/iplocate/free-proxy-list/main/all-proxies.txt"},
+			},
 			Parse: parseOpenProxies,
+		},
+		sourceSpec{
+			Name: "ipgeo-vpn", License: "CC BY-SA 4.0", Optional: true,
+			Files: []fetchFile{{
+				Name: "ipgeo-vpn.csv.gz",
+				URL:  "https://github.com/whois-api-llc/ipgeo-community/releases/latest/download/community-vpn-list.csv.gz",
+			}},
+			Parse: parseIPGeoVPN,
+		},
+		sourceSpec{
+			Name: "hexydec-datacenter", License: "MIT", Optional: true, Partial: true,
+			Files: []fetchFile{
+				{Name: "hexydec-datacentres-ipv4.txt", URL: "https://raw.githubusercontent.com/hexydec/ip-ranges/main/output/datacentres-ipv4.txt"},
+				{Name: "hexydec-datacentres-ipv6.txt", URL: "https://raw.githubusercontent.com/hexydec/ip-ranges/main/output/datacentres-ipv6.txt"},
+			},
+			Parse: func(dir string, files []string) (parsedSource, error) {
+				return parseCIDRText(dir, files, "hosting", 80, map[string]any{"list": "hexydec-datacentres"})
+			},
+		},
+		sourceSpec{
+			Name: "cloud-cn", License: "MIT", Optional: true, Partial: true,
+			Files: []fetchFile{
+				{Name: "cloud-cn-aliyun-ipv4.txt", URL: "https://raw.githubusercontent.com/axpwx/IP-Data/master/provider/aliyun-cidr-ipv4.txt"},
+				{Name: "cloud-cn-aliyun-ipv6.txt", URL: "https://raw.githubusercontent.com/axpwx/IP-Data/master/provider/aliyun-cidr-ipv6.txt"},
+				{Name: "cloud-cn-baidu-ipv4.txt", URL: "https://raw.githubusercontent.com/axpwx/IP-Data/master/provider/baidu-cidr-ipv4.txt"},
+				{Name: "cloud-cn-baidu-ipv6.txt", URL: "https://raw.githubusercontent.com/axpwx/IP-Data/master/provider/baidu-cidr-ipv6.txt"},
+				{Name: "cloud-cn-huawei-ipv4.txt", URL: "https://raw.githubusercontent.com/axpwx/IP-Data/master/provider/huawei-cidr-ipv4.txt"},
+				{Name: "cloud-cn-huawei-ipv6.txt", URL: "https://raw.githubusercontent.com/axpwx/IP-Data/master/provider/huawei-cidr-ipv6.txt"},
+				{Name: "cloud-cn-jdcloud-ipv4.txt", URL: "https://raw.githubusercontent.com/axpwx/IP-Data/master/provider/jdcloud-cidr-ipv4.txt"},
+				{Name: "cloud-cn-jdcloud-ipv6.txt", URL: "https://raw.githubusercontent.com/axpwx/IP-Data/master/provider/jdcloud-cidr-ipv6.txt"},
+				{Name: "cloud-cn-ksyun-ipv4.txt", URL: "https://raw.githubusercontent.com/axpwx/IP-Data/master/provider/ksyun-cidr-ipv4.txt"},
+				{Name: "cloud-cn-ksyun-ipv6.txt", URL: "https://raw.githubusercontent.com/axpwx/IP-Data/master/provider/ksyun-cidr-ipv6.txt"},
+				{Name: "cloud-cn-tencent-ipv4.txt", URL: "https://raw.githubusercontent.com/axpwx/IP-Data/master/provider/tencent-cidr-ipv4.txt"},
+				{Name: "cloud-cn-tencent-ipv6.txt", URL: "https://raw.githubusercontent.com/axpwx/IP-Data/master/provider/tencent-cidr-ipv6.txt"},
+				{Name: "cloud-cn-ucloud-ipv4.txt", URL: "https://raw.githubusercontent.com/axpwx/IP-Data/master/provider/ucloud-cidr-ipv4.txt"},
+				{Name: "cloud-cn-ucloud-ipv6.txt", URL: "https://raw.githubusercontent.com/axpwx/IP-Data/master/provider/ucloud-cidr-ipv6.txt"},
+			},
+			Parse: parseCloudCN,
 		},
 	)
 

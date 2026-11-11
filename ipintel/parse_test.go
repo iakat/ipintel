@@ -63,8 +63,8 @@ func TestParseBadASN(t *testing.T) {
 
 func TestParseOpenProxies(t *testing.T) {
 	dir := t.TempDir()
-	writeTestFile(t, dir, "open-proxies.txt", "http://1.2.3.4:8080\nsocks5://[2001:db8::1]:1080\nuser:pass@5.6.7.8:3128\n")
-	got, err := parseOpenProxies(dir, []string{"open-proxies.txt"})
+	writeTestFile(t, dir, "open-proxies-iplocate.txt", "http://1.2.3.4:8080\nsocks5://[2001:db8::1]:1080\nuser:pass@5.6.7.8:3128\n")
+	got, err := parseOpenProxies(dir, []string{"open-proxies-iplocate.txt"})
 	if err != nil {
 		t.Fatal(err)
 	}
