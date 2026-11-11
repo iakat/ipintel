@@ -13,6 +13,7 @@ type fetchFile struct {
 
 type sourceSpec struct {
 	Name     string
+	Group    string
 	Homepage string
 	License  string
 	Optional bool
@@ -31,29 +32,38 @@ type parsedSource struct {
 // sourceHomepages is the public credit/homepage for each source. Keep it in
 // sync with the README source table.
 var sourceHomepages = map[string]string{
-	"openasn":            "https://github.com/openasn/openasn",
-	"geolite2-country":   "https://dev.maxmind.com/geoip/geolite2-free-geolocation-data/",
-	"geolite2-asn":       "https://dev.maxmind.com/geoip/geolite2-free-geolocation-data/",
-	"x4b-vpn":            "https://github.com/X4BNet/lists_vpn",
-	"x4b-datacenter":     "https://github.com/X4BNet/lists_vpn",
-	"vpn-provider":       "https://github.com/Joe12387/open-source-vpn-ip-lists",
-	"nazgul-vpn":         "https://github.com/NazgulCoder/IPLists",
-	"pomerium-vpn":       "https://github.com/pomerium/vpnlist",
-	"cloudflare-warp":    "https://github.com/NazgulCoder/IPLists",
-	"bad-asn-list":       "https://github.com/brianhama/bad-asn-list",
-	"tor-exit":           "https://check.torproject.org/torbulkexitlist",
-	"icloud-relay":       "https://support.apple.com/en-us/102602",
-	"aws":                "https://docs.aws.amazon.com/vpc/latest/userguide/aws-ip-ranges.html",
-	"gcp":                "https://cloud.google.com/compute/docs/faq#find_ip_range",
-	"cloudflare":         "https://www.cloudflare.com/ips/",
-	"oracle":             "https://docs.oracle.com/en-us/iaas/tools/public_ip_ranges.json",
-	"digitalocean":       "https://www.digitalocean.com/geo/google.csv",
-	"linode":             "https://geoip.linode.com/",
-	"fastly":             "https://www.fastly.com/documentation/reference/api/utils/public-ip-list/",
-	"open-proxies":       "https://github.com/monosans/proxy-list",
-	"ipgeo-vpn":          "https://github.com/whois-api-llc/ipgeo-community",
-	"hexydec-datacenter": "https://github.com/hexydec/ip-ranges",
-	"cloud-cn":           "https://github.com/axpwx/IP-Data",
+	"openasn":                "https://github.com/openasn/openasn",
+	"geolite2-country":       "https://dev.maxmind.com/geoip/geolite2-free-geolocation-data/",
+	"geolite2-asn":           "https://dev.maxmind.com/geoip/geolite2-free-geolocation-data/",
+	"x4b-vpn":                "https://github.com/X4BNet/lists_vpn",
+	"x4b-datacenter":         "https://github.com/X4BNet/lists_vpn",
+	"vpn-provider":           "https://github.com/Joe12387/open-source-vpn-ip-lists",
+	"nazgul-vpn":             "https://github.com/NazgulCoder/IPLists",
+	"pomerium-vpn":           "https://github.com/pomerium/vpnlist",
+	"cloudflare-warp":        "https://github.com/NazgulCoder/IPLists",
+	"bad-asn-list":           "https://github.com/brianhama/bad-asn-list",
+	"tor-exit":               "https://check.torproject.org/torbulkexitlist",
+	"icloud-relay":           "https://support.apple.com/en-us/102602",
+	"aws":                    "https://docs.aws.amazon.com/vpc/latest/userguide/aws-ip-ranges.html",
+	"gcp":                    "https://cloud.google.com/compute/docs/faq#find_ip_range",
+	"cloudflare":             "https://www.cloudflare.com/ips/",
+	"oracle":                 "https://docs.oracle.com/en-us/iaas/tools/public_ip_ranges.json",
+	"digitalocean":           "https://www.digitalocean.com/geo/google.csv",
+	"linode":                 "https://geoip.linode.com/",
+	"fastly":                 "https://www.fastly.com/documentation/reference/api/utils/public-ip-list/",
+	"open-proxies":           "https://github.com/monosans/proxy-list",
+	"ipgeo-vpn":              "https://github.com/whois-api-llc/ipgeo-community",
+	"hexydec-datacenter":     "https://github.com/hexydec/ip-ranges",
+	"cloud-cn":               "https://github.com/axpwx/IP-Data",
+	"googlebot":              "https://developers.google.com/crawling/docs/crawlers-fetchers/overview-google-crawlers",
+	"google-special-crawler": "https://developers.google.com/crawling/docs/crawlers-fetchers/google-special-case-crawlers",
+	"bingbot":                "https://www.bing.com/webmasters/help/which-crawlers-does-bing-use-8c184ec0",
+	"applebot":               "https://support.apple.com/en-us/HT204683",
+	"gptbot":                 "https://platform.openai.com/docs/bots",
+	"openai-searchbot":       "https://platform.openai.com/docs/bots",
+	"chatgpt-user":           "https://platform.openai.com/docs/bots",
+	"perplexitybot":          "https://docs.perplexity.ai/guides/bots",
+	"ccbot":                  "https://commoncrawl.org/ccbot",
 }
 
 // sourceSpecs is the single source of truth for URLs, raw file names and
@@ -273,6 +283,13 @@ func sourceSpecs(opts Options) []sourceSpec {
 		},
 	)
 
+	// Crawler ranges are published by the operators themselves. They are
+	// evidence only: the category weight is 0, so a crawler match never
+	// changes the score or the verdict. Grouping and per-bot detail let a
+	// caller allow known crawlers without treating AI crawlers the same as
+	// search crawlers.
+	specs = append(specs, crawlerSpecs()...)
+
 	for i := range specs {
 		specs[i].Homepage = sourceHomepages[specs[i].Name]
 	}
@@ -281,9 +298,104 @@ func sourceSpecs(opts Options) []sourceSpec {
 		if opts.Exclude[spec.Name] {
 			continue
 		}
+		// A group name disables every source in that group.
+		if spec.Group != "" && opts.Exclude[spec.Group] {
+			continue
+		}
 		out = append(out, spec)
 	}
 	return out
+}
+
+// crawlerSpecs returns the vendor-published crawler and fetcher ranges. Every
+// source is optional so a retired feed cannot break a build. The category
+// (search_crawler or ai_crawler) carries no score weight; the group only marks
+// the sources as crawler lists.
+func crawlerSpecs() []sourceSpec {
+	group := "crawlers"
+	return []sourceSpec{
+		{
+			Name: "googlebot", Group: group, Optional: true,
+			License: "Google crawler IP ranges (public)",
+			Files: []fetchFile{{
+				Name: "googlebot-common.json",
+				URL:  "https://developers.google.com/static/crawling/ipranges/common-crawlers.json",
+			}},
+			Parse: parseBotRanges("search_crawler", "Google", "Googlebot"),
+		},
+		{
+			Name: "google-special-crawler", Group: group, Optional: true,
+			License: "Google crawler IP ranges (public)",
+			Files: []fetchFile{{
+				Name: "googlebot-special.json",
+				URL:  "https://developers.google.com/static/crawling/ipranges/special-crawlers.json",
+			}},
+			Parse: parseBotRanges("search_crawler", "Google", "AdsBot/Mediapartners"),
+		},
+		{
+			Name: "bingbot", Group: group, Optional: true,
+			License: "Bing crawler IP ranges (public)",
+			Files: []fetchFile{{
+				Name: "bingbot.json",
+				URL:  "https://www.bing.com/toolbox/bingbot.json",
+			}},
+			Parse: parseBotRanges("search_crawler", "Microsoft", "Bingbot"),
+		},
+		{
+			Name: "applebot", Group: group, Optional: true,
+			License: "Apple crawler IP ranges (public)",
+			Files: []fetchFile{{
+				Name: "applebot.json",
+				URL:  "https://search.developer.apple.com/applebot.json",
+			}},
+			Parse: parseBotRanges("search_crawler", "Apple", "Applebot"),
+		},
+		{
+			Name: "gptbot", Group: group, Optional: true,
+			License: "OpenAI crawler IP ranges (public)",
+			Files: []fetchFile{{
+				Name: "gptbot.json",
+				URL:  "https://openai.com/gptbot.json",
+			}},
+			Parse: parseBotRanges("ai_crawler", "OpenAI", "GPTBot"),
+		},
+		{
+			Name: "openai-searchbot", Group: group, Optional: true,
+			License: "OpenAI crawler IP ranges (public)",
+			Files: []fetchFile{{
+				Name: "openai-searchbot.json",
+				URL:  "https://openai.com/searchbot.json",
+			}},
+			Parse: parseBotRanges("ai_crawler", "OpenAI", "OAI-SearchBot"),
+		},
+		{
+			Name: "chatgpt-user", Group: group, Optional: true,
+			License: "OpenAI fetcher IP ranges (public)",
+			Files: []fetchFile{{
+				Name: "chatgpt-user.json",
+				URL:  "https://openai.com/chatgpt-user.json",
+			}},
+			Parse: parseBotRanges("ai_crawler", "OpenAI", "ChatGPT-User"),
+		},
+		{
+			Name: "perplexitybot", Group: group, Optional: true,
+			License: "Perplexity crawler IP ranges (public)",
+			Files: []fetchFile{{
+				Name: "perplexitybot.json",
+				URL:  "https://www.perplexity.ai/perplexitybot.json",
+			}},
+			Parse: parseBotRanges("ai_crawler", "Perplexity", "PerplexityBot"),
+		},
+		{
+			Name: "ccbot", Group: group, Optional: true,
+			License: "Common Crawl crawler IP ranges (public)",
+			Files: []fetchFile{{
+				Name: "ccbot.json",
+				URL:  "https://index.commoncrawl.org/ccbot.json",
+			}},
+			Parse: parseBotRanges("ai_crawler", "Common Crawl", "CCBot"),
+		},
+	}
 }
 
 // SourceNames returns every selectable source name, including optional ones.
@@ -294,4 +406,20 @@ func SourceNames() []string {
 		names = append(names, spec.Name)
 	}
 	return names
+}
+
+// SourceGroups returns the group names that --exclude also accepts, in the
+// order they first appear in the source list.
+func SourceGroups() []string {
+	specs := sourceSpecs(Options{})
+	seen := make(map[string]bool, len(specs))
+	groups := make([]string, 0, 4)
+	for _, spec := range specs {
+		if spec.Group == "" || seen[spec.Group] {
+			continue
+		}
+		seen[spec.Group] = true
+		groups = append(groups, spec.Group)
+	}
+	return groups
 }

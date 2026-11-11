@@ -93,7 +93,7 @@ func Build(opts BuildOptions) (*Manifest, error) {
 			}
 			meta := baseSources[spec.Name]
 			meta.ID, meta.Records, meta.Optional = id, len(old), spec.Optional
-			meta.Homepage, meta.License = spec.Homepage, spec.License
+			meta.Group, meta.Homepage, meta.License = spec.Group, spec.Homepage, spec.License
 			sources = append(sources, meta)
 			if spec.Name == "bad-asn-list" {
 				for asn, entity := range baseASNs {
@@ -124,7 +124,8 @@ func Build(opts BuildOptions) (*Manifest, error) {
 			asns[asn] = entity
 		}
 		sources = append(sources, SourceMeta{
-			ID: id, Name: spec.Name, Homepage: spec.Homepage, License: spec.License,
+			ID: id, Name: spec.Name, Group: spec.Group,
+			Homepage: spec.Homepage, License: spec.License,
 			Files: files, Records: len(parsed.Records) + len(parsed.ASNs),
 			Optional: spec.Optional,
 		})

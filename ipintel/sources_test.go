@@ -2,6 +2,9 @@ package ipintel
 
 import (
 	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -62,5 +65,58 @@ func TestParseIPFile(t *testing.T) {
 	got, err := parse(dir, []string{"ips.txt"})
 	if err != nil || len(got.Records) != 1 || got.Records[0].Category != "tor" {
 		t.Fatalf("parseIPFile = %+v, %v", got, err)
+	}
+}
+
+// TestReadmeListsEverySource keeps the credit table in README.md in sync with
+// the source registry. The table is the public attribution surface, so a new
+// source must not ship without a row.
+func TestReadmeListsEverySource(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	readme := string(b)
+	for _, name := range SourceNames() {
+		if !strings.Contains(readme, "| `"+name+"` |") {
+			t.Errorf("source %q has no README table row", name)
+		}
+	}
+	groups := map[string]bool{}
+	for _, spec := range sourceSpecs(Options{}) {
+		if spec.Group != "" {
+			groups[spec.Group] = true
+		}
+	}
+	for group := range groups {
+		if !strings.Contains(readme, "`"+group+"`") {
+			t.Errorf("group %q is not mentioned in the README", group)
+		}
+		if !strings.Contains(readme, "--exclude "+group) {
+			t.Errorf("group %q has no documented --exclude example", group)
+		}
+	}
+}
+
+func TestSourceGroups(t *testing.T) {
+	groups := SourceGroups()
+	if len(groups) != 1 || groups[0] != "crawlers" {
+		t.Fatalf("SourceGroups = %v", groups)
+	}
+	// Ungrouped sources must not contribute an empty group name.
+	specs := sourceSpecs(Options{})
+	grouped := 0
+	for _, spec := range specs {
+		if spec.Group == "crawlers" {
+			grouped++
+		}
+	}
+	if grouped == 0 {
+		t.Fatal("no crawler sources")
+	}
+	for _, g := range groups {
+		if g == "" {
+			t.Fatal("empty group name")
+		}
 	}
 }

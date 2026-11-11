@@ -103,6 +103,52 @@ func detailForCIDR(token string, extra map[string]any) string {
 	return detailJSON(m)
 }
 
+// parsePrefixJSON reads the {"prefixes":[{"ipv4Prefix":...}|{"ipv6Prefix":...}]}
+// shape published by search engines and AI crawlers. An entry that carries
+// neither key is skipped, so an upstream format addition cannot fail a build.
+func parsePrefixJSON(dir string, files []string, category string, confidence uint8, extra map[string]any) (parsedSource, error) {
+	var out parsedSource
+	b, err := os.ReadFile(filepath.Join(dir, files[0]))
+	if err != nil {
+		return out, err
+	}
+	var doc struct {
+		Prefixes []struct {
+			IPv4 string `json:"ipv4Prefix"`
+			IPv6 string `json:"ipv6Prefix"`
+		} `json:"prefixes"`
+	}
+	if err := json.Unmarshal(b, &doc); err != nil {
+		return out, fmt.Errorf("%s: %w", files[0], err)
+	}
+	for _, entry := range doc.Prefixes {
+		for _, token := range []string{entry.IPv4, entry.IPv6} {
+			if strings.TrimSpace(token) == "" {
+				continue
+			}
+			p, err := parsePrefix(token)
+			if err != nil {
+				return out, fmt.Errorf("%s: %w", files[0], err)
+			}
+			out.Records = append(out.Records, recordFromPrefix(p, category, confidence, detailForCIDR(token, extra)))
+		}
+	}
+	return out, nil
+}
+
+// parseBotRanges builds the parser for one crawler publisher. The detail
+// object names the operator and the specific bot so an allowlist decision can
+// distinguish Googlebot from AdsBot or GPTBot.
+func parseBotRanges(category, operator, bot string) func(string, []string) (parsedSource, error) {
+	return func(dir string, files []string) (parsedSource, error) {
+		return parsePrefixJSON(dir, files, category, 100, map[string]any{
+			"operator": operator,
+			"bot":      bot,
+			"group":    "crawlers",
+		})
+	}
+}
+
 func parseProviderIPs(dir string, files []string) (parsedSource, error) {
 	var out parsedSource
 	for _, name := range files {

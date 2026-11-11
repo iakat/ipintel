@@ -13,6 +13,8 @@ var categoryWeights = map[string]int{
 	"residential_proxy":  95,
 	"vpn":                80,
 	"vpn_candidate":      0,
+	"search_crawler":     0,
+	"ai_crawler":         0,
 	"proxy":              70,
 	"relay":              50,
 	"hosting":            45,
@@ -29,7 +31,8 @@ var categoryWeights = map[string]int{
 }
 
 var categoryOrder = []string{
-	"tor", "residential_proxy", "vpn", "vpn_candidate", "proxy", "relay", "hosting",
+	"tor", "residential_proxy", "vpn", "vpn_candidate", "search_crawler", "ai_crawler",
+	"proxy", "relay", "hosting",
 	"enterprise_gateway", "cdn", "business", "mobile", "education",
 	"government", "residential_isp", "unknown",
 }

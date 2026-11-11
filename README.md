@@ -16,7 +16,8 @@ go install github.com/iakat/ipintel/cmd/ip-intel@latest
 ## Build the database
 
 All sources are enabled by default. `--exclude` is repeatable and also accepts
-comma-separated names; `ip-intel sources` prints the accepted names.
+comma-separated names; `ip-intel sources` prints the accepted names. A group
+name such as `crawlers` disables every source in that group.
 
 ```bash
 # download everything (OpenASN, GeoLite2, X4B, VPN lists, Tor, iCloud Relay,
@@ -26,6 +27,9 @@ go run ./cmd/ip-intel fetch --out data
 # leave out a few sources
 go run ./cmd/ip-intel fetch --out data \
   --exclude open-proxies,cloudflare-warp
+
+# leave out a whole group (the crawler lists)
+go run ./cmd/ip-intel fetch --out data --exclude crawlers
 
 # incremental update: HEAD each source, download only changed files, and
 # reuse the old DB records for sources whose raw file is absent/unchanged
@@ -75,7 +79,8 @@ The JSON contains:
 - every source result, including `matched: false`;
 - the raw detail object for each match. Open-proxy matches carry `sources`,
   `roles`, `protocols` and `ports`; a derived residential match adds
-  `network_category`, `derived` and `derived_from`.
+  `network_category`, `derived` and `derived_from`; a crawler match adds
+  `operator`, `bot` and `group`.
 
 ## Service
 
@@ -126,8 +131,9 @@ The GitHub Actions workflow runs `go vet`, the tests, and the coverage gate.
 ## Source credits
 
 All sources are enabled by default. `--exclude` accepts the source name shown
-below; `ip-intel sources` prints the same list. The exact feed URL for every
-downloaded file is also recorded in the database manifest.
+below; `ip-intel sources` prints the same list. It also accepts a group name,
+such as `crawlers`, to leave out every source in that group. The exact feed URL
+for every downloaded file is also recorded in the database manifest.
 
 | Source (`--exclude`) | Used for | Credit | License / terms |
 |---|---|---|---|
@@ -154,6 +160,15 @@ downloaded file is also recorded in the database manifest.
 | `ipgeo-vpn` | Provider-named VPN ranges | [ipgeo Community Edition](https://github.com/whois-api-llc/ipgeo-community) | [CC BY-SA 4.0](https://github.com/whois-api-llc/ipgeo-community/blob/main/LICENSE) |
 | `hexydec-datacenter` | Datacentre and hosting ranges | [hexydec/ip-ranges](https://github.com/hexydec/ip-ranges) | [MIT](https://github.com/hexydec/ip-ranges/blob/main/LICENSE) |
 | `cloud-cn` | Alibaba, Tencent, Huawei, Baidu, JD, UCloud and Kingsoft Cloud ranges | [axpwx/IP-Data](https://github.com/axpwx/IP-Data) | [MIT](https://github.com/axpwx/IP-Data/blob/master/LICENSE) |
+| `googlebot` | Googlebot and Google common crawler ranges | [Google crawler IP ranges](https://developers.google.com/crawling/docs/crawlers-fetchers/overview-google-crawlers) | Google public list |
+| `google-special-crawler` | AdsBot, Mediapartners and other Google special-case crawler ranges | [Google special-case crawlers](https://developers.google.com/crawling/docs/crawlers-fetchers/google-special-case-crawlers) | Google public list |
+| `bingbot` | Bingbot ranges | [Bing crawler documentation](https://www.bing.com/webmasters/help/which-crawlers-does-bing-use-8c184ec0), [bingbot.json](https://www.bing.com/toolbox/bingbot.json) | Microsoft public list |
+| `applebot` | Applebot ranges | [Applebot](https://support.apple.com/en-us/HT204683), [applebot.json](https://search.developer.apple.com/applebot.json) | Apple public list |
+| `gptbot` | GPTBot ranges | [OpenAI bots](https://platform.openai.com/docs/bots), [gptbot.json](https://openai.com/gptbot.json) | OpenAI public list |
+| `openai-searchbot` | OAI-SearchBot ranges | [OpenAI bots](https://platform.openai.com/docs/bots), [searchbot.json](https://openai.com/searchbot.json) | OpenAI public list |
+| `chatgpt-user` | ChatGPT-User (user-triggered fetcher) ranges | [OpenAI bots](https://platform.openai.com/docs/bots), [chatgpt-user.json](https://openai.com/chatgpt-user.json) | OpenAI public list |
+| `perplexitybot` | PerplexityBot ranges | [Perplexity bots](https://docs.perplexity.ai/guides/bots), [perplexitybot.json](https://www.perplexity.ai/perplexitybot.json) | Perplexity public list |
+| `ccbot` | CCBot ranges | [Common Crawl CCBot](https://commoncrawl.org/ccbot), [ccbot.json](https://index.commoncrawl.org/ccbot.json) | Common Crawl public list |
 
 `vpn-provider` currently contains first-party lists for
 [AirVPN](https://airvpn.org/), [IVPN](https://www.ivpn.net/),
@@ -170,6 +185,7 @@ the GeoLite2 EULA applies. The `aws`, `gcp`, `cloudflare`, `oracle`,
 `digitalocean`, `linode`, `fastly`, `open-proxies`, `ipgeo-vpn`,
 `hexydec-datacenter` and `cloud-cn` sources are marked optional in the
 manifest: missing files do not fail a build, but they are enabled by default.
+The crawler sources are optional for the same reason.
 
 The `open-proxies` source is one logical group with one record per IP. It
 merges monosans, ClearProxy and iplocate, keeps the protocols, ports and
@@ -199,6 +215,47 @@ an open-proxy list. `business`, `education`, `government`, `hosting`, `vpn`,
 `tor` and `cdn` networks stay `proxy`, but the detail object records the
 OpenASN network category for auditing.
 
+## Crawler ranges
+
+The nine crawler sources form the `crawlers` group (`group` in
+`/v1/sources` and `/v1/manifest`). They are evidence only: the categories
+`search_crawler` and `ai_crawler` have score weight 0, so a crawler match never
+changes `score` or `verdict`. The point is to tell a caller *which* operator
+sent the request so it can allow the traffic explicitly.
+
+The split is deliberate. `search_crawler` covers Googlebot, Google's
+special-case crawlers (AdsBot, Mediapartners), Bingbot and Applebot;
+`ai_crawler` covers GPTBot, OAI-SearchBot, ChatGPT-User, PerplexityBot and
+CCBot. A caller that wants search engines but not AI training traffic can look
+at `category` and the per-record detail:
+
+```json
+{
+  "source": "googlebot",
+  "category": "search_crawler",
+  "confidence": 100,
+  "matched": true,
+  "detail": {
+    "bot": "Googlebot",
+    "cidr": "66.249.64.0/27",
+    "group": "crawlers",
+    "operator": "Google"
+  }
+}
+```
+
+`chatgpt-user` is user-triggered fetching rather than crawling, but it is
+grouped with the AI ranges because it is the same allow/deny decision.
+
+Every crawler source is optional, and `--exclude crawlers` leaves out the whole
+group in one flag.
+
+These lists verify the source IP only. An operator that needs proof the client
+really is the bot (and not a spoofed user agent) must still do the
+forward-confirmed reverse DNS check described by each vendor; that check is
+outside this database. Google's `user-triggered-fetchers*` lists are not
+included because they overlap general GCP address space. DuckDuckGo, Yandex,
+Amazon and Meta publish no machine-readable IP list and are omitted.
 
 ## License
 

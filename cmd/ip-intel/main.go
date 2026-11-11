@@ -60,6 +60,9 @@ func run(args []string) int {
 		for _, name := range ipintel.SourceNames() {
 			fmt.Fprintln(stdout, name)
 		}
+		if groups := ipintel.SourceGroups(); len(groups) > 0 {
+			fmt.Fprintf(stdout, "\ngroups: %s\n", strings.Join(groups, ", "))
+		}
 		return 0
 	case "-h", "--help", "help":
 		usage()
@@ -87,7 +90,8 @@ usage:
   ip-intel sources
 
 fetch downloads all sources by default, then builds the compressed database.
-Use --exclude (repeatable or comma-separated) to leave sources out.
+Use --exclude (repeatable or comma-separated) to leave sources out; a group
+name such as crawlers excludes every source in that group.
 --update reuses records from the existing DB for sources whose raw files are
 missing or unchanged; it still downloads every changed source.
 build rebuilds the database from an existing raw directory.

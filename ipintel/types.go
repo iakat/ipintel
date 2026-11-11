@@ -34,6 +34,7 @@ type FileMeta struct {
 type SourceMeta struct {
 	ID       uint16     `json:"id"`
 	Name     string     `json:"name"`
+	Group    string     `json:"group,omitempty"`
 	Homepage string     `json:"homepage,omitempty"`
 	License  string     `json:"license,omitempty"`
 	Files    []FileMeta `json:"files,omitempty"`
